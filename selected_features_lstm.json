@@ -1,0 +1,17 @@
+[
+  "tot_fwd_pkts",
+  "flow_iat_mean",
+  "flow_byts_s",
+  "fwd_pkts_s",
+  "flow_duration",
+  "pkt_len_max",
+  "flow_iat_max",
+  "flow_iat_std",
+  "totlen_fwd_pkts",
+  "flow_pkts_s",
+  "fwd_iat_min",
+  "fwd_iat_mean",
+  "fwd_iat_std",
+  "fwd_iat_tot",
+  "subflow_fwd_pkts"
+]
