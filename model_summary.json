@@ -1,0 +1,16 @@
+{
+  "model_type": "Bidirectional LSTM",
+  "total_features": 15,
+  "timesteps": 5,
+  "train_samples": 11523,
+  "val_samples": 3838,
+  "test_samples": 3839,
+  "test_accuracy": 0.9997395154988278,
+  "test_precision": 1.0,
+  "test_recall": 0.9995265151515151,
+  "test_f1": 0.9997632015155103,
+  "final_train_loss": 0.0515081062912941,
+  "final_val_loss": 0.030690722167491913,
+  "loss_gap": 0.020817384123802185,
+  "overfitting": "No"
+}
