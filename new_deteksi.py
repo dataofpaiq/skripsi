@@ -8,20 +8,18 @@ ONOS_URL = "http://localhost:8181/onos/v1/flows"
 AUTH = ('onos', 'rocks')
 BLOCK_THRESHOLD = 0.5
 
-# Mode mitigasi: 'block', 'rate_limit', atau 'temp_block'
-MITIGATION_MODE = 'temp_block'  # RECOMMENDED: temporary block dengan auto-unblock
+# Mode mitigasi: 'per_source' atau 'per_destination'
+MITIGATION_MODE = 'per_source'  # UBAH: Default ke per_source agar hanya block attacker
 
-# Jika rate_limit, set bandwidth maksimal (Kbps)
-RATE_LIMIT_KBPS = 100  # 100 Kbps (cukup untuk ping/ssh, tapi tidak untuk flood)
-
-# Temporary block duration (detik) - flow rule auto expire
-TEMP_BLOCK_DURATION = 20  # Block 20 detik, lalu auto-unblock
-
-# Threshold detection
+# Threshold untuk mode per_source (per MAC)
 REPEAT_LIMIT_SOURCE = 10
+
+# Threshold untuk mode per_destination (per target/victim) - TIDAK DIGUNAKAN SEKARANG
+REPEAT_LIMIT_DESTINATION = 5
+
 RESET_API = "http://localhost:8000/reset"
 FLOW_SESSION_RESET = "http://localhost:5050/reset"
-UNBLOCK_DELAY = 60  # Untuk permanent block mode
+UNBLOCK_DELAY = 60  # UBAH: 30 -> 60 detik (1 menit) sebelum attacker di-unblock otomatis
 
 # --- State dan Tracking ---
 # Per source tracking
@@ -275,67 +273,11 @@ def monitor_anomalies_and_mitigate(anomalies):
 
 def mitigate_per_source(ddos_flows):
     """
-    Mitigasi berdasarkan source MAC/Port.
-    Jika USE_PORT_BLOCKING=True dan --rand-source terdeteksi, block port fisik.
+    Mitigasi berdasarkan source MAC (hanya block attacker).
+    Victim tetap bisa menerima traffic dari host lain.
     """
     global total_anomalies_received, total_mitigations_done
     
-    # Detect if --rand-source is being used (banyak source berbeda ke 1 target)
-    src_macs = set(a.get("src_mac") for a in ddos_flows if a.get("src_mac"))
-    dst_ips = set(a.get("dst_ip") for a in ddos_flows if a.get("dst_ip"))
-    
-    is_distributed = len(src_macs) > 5 and len(dst_ips) == 1
-    
-    if is_distributed and USE_PORT_BLOCKING:
-        print(f"\n[DETECTION] Distributed attack detected!")
-        print(f"            Unique sources: {len(src_macs)}")
-        print(f"            Target: {list(dst_ips)[0]}")
-        print(f"            Switching to PORT-BASED blocking...")
-        
-        # Group by victim to find attacker patterns
-        victim_attacks = {}
-        for anomaly in ddos_flows:
-            dst_ip = anomaly.get("dst_ip")
-            if dst_ip not in victim_attacks:
-                victim_attacks[dst_ip] = []
-            victim_attacks[dst_ip].append(anomaly)
-        
-        for dst_ip, attacks in victim_attacks.items():
-            # Take first source MAC as representative (they're all from same physical host)
-            first_attack = attacks[0]
-            src_mac = first_attack.get("src_mac")
-            
-            # Get physical port
-            device_id, port = get_port_from_mac(src_mac)
-            
-            if device_id and port:
-                print(f"[INFO] Attacker connected to {device_id} port {port}")
-                print(f"[MITIGASI] Blocking PORT {port} (physical host block)")
-                
-                success = submit_mitigation_block_port(device_id, port)
-                
-                if success:
-                    total_mitigations_done += 1
-                    BLOCKED_MACS.add(f"PORT:{device_id}:{port}")
-                    
-                    print(f"[SUCCESS] Port {port} blocked - All MACs from this port blocked")
-                    print(f"[INFO] Attacker cannot spoof anymore from this port")
-                    
-                    # Reset buffers
-                    try:
-                        requests.post(RESET_API, timeout=5)
-                        requests.post(FLOW_SESSION_RESET, timeout=5)
-                    except:
-                        pass
-                    
-                    return  # Done, port blocked
-            else:
-                print(f"[WARN] Could not determine port, falling back to destination protection")
-                # Fallback to destination protection
-                mitigate_per_destination(ddos_flows)
-                return
-    
-    # Normal per-source blocking (untuk single source attack)
     for anomaly in ddos_flows:
         total_anomalies_received += 1
         
@@ -365,16 +307,8 @@ def mitigate_per_source(ddos_flows):
                 print(f"                      Total attacks: {mac_anomaly_count[src_mac]}")
                 print(f"{'='*60}")
                 
-                # Pilih metode mitigasi berdasarkan mode
-                if MITIGATION_MODE == 'rate_limit':
-                    print(f"[MODE] Rate limiting to {RATE_LIMIT_KBPS} Kbps")
-                    success = submit_mitigation_rate_limit(src_mac, dst_mac, src_ip, dst_ip, RATE_LIMIT_KBPS)
-                elif MITIGATION_MODE == 'temp_block':
-                    print(f"[MODE] Temporary block for {TEMP_BLOCK_DURATION} seconds")
-                    success = submit_mitigation_priority_drop(src_mac, dst_mac, src_ip, dst_ip)
-                else:  # 'block' - permanent until manual/auto unblock
-                    print(f"[MODE] Permanent block (auto-unblock in {UNBLOCK_DELAY}s)")
-                    success = submit_mitigation_block_source(src_mac, dst_mac, src_ip, dst_ip)
+                # Block dengan include IP untuk lebih spesifik
+                success = submit_mitigation_block_source(src_mac, dst_mac, src_ip, dst_ip)
                 
                 if success:
                     BLOCKED_MACS.add(src_mac)
@@ -385,39 +319,23 @@ def mitigate_per_source(ddos_flows):
                         "last_anomaly": anomaly,
                         "timestamp": time.time(),
                         "victim_ip": dst_ip,
-                        "victim_mac": dst_mac,
-                        "mode": MITIGATION_MODE
+                        "victim_mac": dst_mac
                     })
                     
-                    if MITIGATION_MODE == 'temp_block':
-                        print(f"[SUCCESS] Attacker {src_mac} temporarily blocked")
-                        print(f"[INFO] Flow rule will auto-expire in {TEMP_BLOCK_DURATION} seconds")
-                        print(f"[INFO] Attacker can then send normal traffic (ping, ssh)")
-                        print(f"[INFO] But flood will be detected and blocked again")
-                        
-                        # Auto-remove from BLOCKED_MACS after duration
-                        def delayed_cleanup(mac):
-                            time.sleep(TEMP_BLOCK_DURATION + 5)  # +5 detik buffer
-                            BLOCKED_MACS.discard(mac)
-                            mac_anomaly_count[mac] = 0
-                            print(f"[CLEANUP] {mac} removed from blocked list (temp block expired)")
-                        
-                        threading.Thread(target=delayed_cleanup, args=(src_mac,), daemon=True).start()
-                    elif MITIGATION_MODE == 'rate_limit':
-                        print(f"[SUCCESS] Attacker {src_mac} rate-limited to {RATE_LIMIT_KBPS} Kbps")
-                        print(f"[INFO] Attacker can still ping/ssh but cannot flood")
-                    else:
-                        print(f"[SUCCESS] Attacker {src_mac} blocked permanently")
-                        print(f"[INFO] Will auto-unblock in {UNBLOCK_DELAY} seconds")
-                        threading.Thread(target=delayed_unblock_source, args=(src_mac,), daemon=True).start()
+                    print(f"[SUCCESS] Attacker {src_mac} diblok ke victim {dst_ip}")
+                    print(f"[INFO] Victim {dst_ip} masih bisa terima traffic dari host lain")
+                    print(f"[INFO] Attacker akan di-unblock otomatis dalam {UNBLOCK_DELAY} detik")
                     
-                    # Reset buffer
+                    # Reset buffer untuk fresh detection
                     try:
                         requests.post(RESET_API, timeout=5)
                         requests.post(FLOW_SESSION_RESET, timeout=5)
                         print(f"[RESET] Detection buffers cleared")
                     except:
                         pass
+                    
+                    # Schedule auto-unblock
+                    threading.Thread(target=delayed_unblock_source, args=(src_mac,), daemon=True).start()
 
 def mitigate_per_destination(ddos_flows):
     """Mitigasi berdasarkan destination (untuk distributed attack dengan --rand-source)"""
