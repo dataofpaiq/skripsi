@@ -49,7 +49,7 @@ TIMESTEPS = 5
 THRESHOLD = 0.5
 
 # Mode deteksi: 'per_source' atau 'per_destination'
-DETECTION_MODE = 'per_destination'  # Ubah ini untuk ganti mode
+DETECTION_MODE = 'per_source'  # Ubah ini untuk ganti mode
 
 class FlowData(BaseModel):
     columns: list
