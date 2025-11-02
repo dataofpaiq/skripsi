@@ -12,6 +12,55 @@ from mitigasi_improved import get_last_mitigated_for
 from threading import Thread
 import tensorflow as tf
 from collections import deque, defaultdict
+import signal
+import sys
+import atexit
+
+# Membersihkan sseluruh flow bray
+def cleanup_on_exit():
+    
+    try:
+        # Ambil semua flow rules
+        response = requests.get(
+            "http://localhost:8181/onos/v1/flows/of:0000000000000001",
+            auth=('onos', 'rocks'),
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            flows = response.json().get("flows", [])
+            
+            # Hapus flow rules dengan priority 40000 (mitigasi rules)
+            for flow in flows:
+                if flow.get("priority") == 40000:
+                    flow_id = flow.get("id")
+                    device_id = flow.get("deviceId")
+                    
+                    del_url = f"http://localhost:8181/onos/v1/flows/{device_id}/{flow_id}"
+                    del_resp = requests.delete(del_url, auth=('onos', 'rocks'), timeout=5)
+                    
+                    print(f"[CLEANUP] Removed flow {flow_id}: {del_resp.status_code}")
+            
+            print("[CLEANUP] All mitigation flows removed")
+        
+        # Reset buffers juga
+        requests.post("http://localhost:8000/reset", timeout=5)
+        requests.post("http://localhost:5050/reset", timeout=5)
+        print("[CLEANUP] Buffers cleared")
+        
+    except Exception as e:
+        print(f"[CLEANUP ERROR] {e}")
+
+# Signal handler untuk Ctrl+C
+def signal_handler(sig, frame):
+    print("\n[SIGNAL] Received interrupt signal")
+    cleanup_on_exit()
+    sys.exit(0)
+
+# Register handlers
+signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+signal.signal(signal.SIGTERM, signal_handler)  # Kill signal
+atexit.register(cleanup_on_exit)               # Normal exit
 
 logging.basicConfig(
     level=logging.DEBUG,
