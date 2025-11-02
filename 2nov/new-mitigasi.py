@@ -6,7 +6,7 @@ from collections import defaultdict
 # --- Konstanta dan Auth ---
 ONOS_URL = "http://localhost:8181/onos/v1/flows"
 AUTH = ('onos', 'rocks')
-BLOCK_THRESHOLD = -0.017323
+BLOCK_THRESHOLD = 0.5
 REPEAT_LIMIT = 50
 RESET_API = "http://localhost:8000/reset"
 FLOW_SESSION_RESET = "http://localhost:5050/reset"
@@ -89,17 +89,24 @@ def delayed_unblock(src_mac):
 
 # --- Monitor dan Mitigasi ---
 def monitor_anomalies_and_mitigate(anomalies):
+    ddos_flows = [a for a in anomalies if a.get("result") == 1 and a.get("status") == "predicted"]
+    
+    if not ddos_flows:
+        return  # Tidak ada DDoS, skip processing
+    
+    print(f"[MITIGASI] Processing {len(ddos_flows)} DDoS flows dari total {len(anomalies)} flows")
+    
     for anomaly in anomalies:
-        score = anomaly.get("score", 0)
+        probability = anomaly.get("probability", 0)
         src_mac = anomaly.get("src_mac")
         dst_mac = anomaly.get("dst_mac")
 
         if not src_mac or not dst_mac:
             continue
 
-        if score < BLOCK_THRESHOLD:
+        if probability >= BLOCK_THRESHOLD:
             mac_anomaly_count[src_mac] += 1
-            print(f"[ANOMALI] {src_mac} → {dst_mac} | Score: {score:.4f} | Count: {mac_anomaly_count[src_mac]}")
+            print(f"[ANOMALI] {src_mac} → {dst_mac} | Prob: {probability:.4f} | Count: {mac_anomaly_count[src_mac]}")
 
             # Tentukan repeat limit berdasarkan protokol
             protocol = anomaly.get("protocol", "").lower()
